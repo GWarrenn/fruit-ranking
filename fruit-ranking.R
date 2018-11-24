@@ -1,11 +1,16 @@
 library(tidyverse)
 library(highcharter)
 library(googlesheets)
+library(ggridges)
 library(ggplot2)
 library(reshape2)
 library(scales)
 library(viridis)
 library(lazyeval)
+library(sf)
+library(survey)
+library(htmlTable)
+library(highcharter)
 
 #####################################################
 ##
@@ -76,17 +81,14 @@ survey_data$income_recode <- factor(survey_data$`What was your total household i
 survey_data$fruit_servings <- ifelse(survey_data$`How many servings of fruit do you eat a day, on average?` == "3 or more","4 or more",
                                      survey_data$`How many servings of fruit do you eat a day, on average?`)
 
-survey_data$`Do you consider yourself to be Conservative, Moderate, or Liberal?` <- factor(
-  survey_data$`Do you consider yourself to be Conservative, Moderate, or Liberal?`,
-  levels = c("Liberal","Moderate","Conservative","Not sure")) 
+survey_data$`Do you consider yourself to be Conservative, Moderate, or Liberal?` <- factor(survey_data$`Do you consider yourself to be Conservative, Moderate, or Liberal?`,
+                                                                                           levels = c("Liberal","Moderate","Conservative","Not sure")) 
 
-survey_data$`Do you consider yourself a Democrat, Republican, or something else?` <- factor(
-  survey_data$`Do you consider yourself a Democrat, Republican, or something else?`,
-  levels = c("Democrat","Independent","Republican","Not sure")) 
+survey_data$`Do you consider yourself a Democrat, Republican, or something else?` <- factor(survey_data$`Do you consider yourself a Democrat, Republican, or something else?`,
+                                                                                            levels = c("Democrat","Independent","Republican","Not sure")) 
 
-survey_data$`In the 2016 election for President, did you vote for Democrat Hillary Clinton or Republican Donald Trump?` <- factor(
-  survey_data$`In the 2016 election for President, did you vote for Democrat Hillary Clinton or Republican Donald Trump?`,
-  levels = c("Democrat Hillary Clinton","Republican Donald Trump","Green Party Jill Stein","Libertarian Gary Johnson","Did not vote","Refuse"))
+survey_data$`In the 2016 election for President, did you vote for Democrat Hillary Clinton or Republican Donald Trump?` <- factor(survey_data$`In the 2016 election for President, did you vote for Democrat Hillary Clinton or Republican Donald Trump?`,
+                                                                                                                                  levels = c("Democrat Hillary Clinton","Republican Donald Trump","Green Party Jill Stein","Libertarian Gary Johnson","Did not vote","Refuse"))
 
 ## reshape fruit data to long for top-level aggregation
 
@@ -126,7 +128,7 @@ overall_bar_plot <- ggplot(overall_stats,aes(x=value,y=freq,fill=value)) +
   geom_text(aes(x=value,y=freq,label=percent(round(freq,2))),vjust = -.5) +
   scale_fill_manual(values = c("#1a9641","#a6d96a","#ffffbf","#fdae61","#d7191c","#D3D3D3")) +
   scale_y_continuous(labels = percent) +
-  labs(title = "Overall Fruit Rankings",
+  labs(title = "Average Fruit Rankings",
        subtitle = paste("among a very non-random sample of",count,"people with opinions about fruit")) +
   guides(fill=F) +
   theme(axis.title = element_blank(),
@@ -169,6 +171,85 @@ fruit_heatmap_plot <- ggplot(stats,aes(x=value,y=reorder(variable,a_freq))) +
 
 ggsave(plot = fruit_heatmap_plot, "images\\fruit_heatmap_plot.png", w = 10.67, h = 8,type = "cairo-png")
 
+stats_gpa <- clean_l %>%
+  filter(!is.na(gpa)) %>%
+  group_by(variable) %>%
+  summarise(avg_gpa = mean(gpa),
+            wtd_gpa = weighted.mean(gpa,weights)) %>%
+  rename(fruit = variable)
+
+stats_gpa <- melt(stats_gpa)
+
+ggplot(stats_gpa,aes(x=reorder(fruit,value),y=variable)) +
+  geom_tile(aes(fill = value),colour = "white") +
+  geom_text(aes(x=fruit,y=variable,label=round(value,2))) +
+  coord_flip() +
+  scale_fill_viridis(name="GPA") +
+  labs(title = paste("Overall Fruit GPA - Weighted vs. unweighted"),
+       subtitle = paste("among a very non-random sample of",count,"people with opinions about fruit")) +
+  theme(legend.position = "bottom",
+        axis.title = element_blank(),
+        axis.text = element_text(size=12),
+        legend.key.width = unit(1, "cm"))
+  
+
+#####################################################
+##
+## Plot 1: Heat map of results WEIGHTED
+##
+#####################################################
+
+survey_data.svy.unweighted <- svydesign(ids=~1, data=survey_data)
+
+sex.dist <- data.frame(gender_recode = c("Male", "Female","Other"),
+                       Freq = nrow(survey_data) * c(0.49, 0.51,.01))
+
+race.dist <- data.frame(race_recode = c("White/Caucasian", "Black or African American","Hispanic or Latino",
+                                          "Asian/Pacific Islander","American Indian or Alaskan Native","Multiple ethnicity/Other"),
+                        Freq = nrow(survey_data) * c(0.766, 0.134,.181,.058,.013,.027))
+
+survey_data.svy.rake <- rake(design = survey_data.svy.unweighted,
+                       sample.margins = list(~gender_recode,~race_recode),
+                       population.margins = list(sex.dist,race.dist))
+
+survey_data$weights <- weights(survey_data.svy.rake)
+
+clean <- survey_data %>%
+  select(fruits,weights)
+
+clean$id <- seq.int(nrow(clean))
+
+clean_l <- melt(clean,id.vars = c("id","weights"))
+
+stats <- clean_l %>%
+  group_by(variable,value) %>%
+  summarise(n=sum(weights)) %>%
+  mutate(freq=n/sum(n))
+
+stats_a_tier <- stats %>%
+  filter(value == "A-tier") %>%
+  rename(a_freq = freq) %>%
+  select(a_freq,variable)
+
+stats <- merge(stats,stats_a_tier)
+
+stats$value <- factor(stats$value,levels = c("A-tier","B-tier","C-tier","D-tier","F-tier","Don't Know/Care"))
+
+count <- nrow(survey_data)
+
+fruit_heatmap_wtd_plot <- ggplot(stats,aes(x=value,y=reorder(variable,a_freq))) +
+  geom_tile(aes(fill = freq),colour = "white") +
+  geom_text(aes(x=value,y=reorder(variable,a_freq),label=percent(round(freq,2)))) +
+  scale_fill_viridis(name="",labels = percent) +
+  labs(title = "Overall Fruit Rankings",
+       subtitle = paste("among a very non-random sample of",count,"people with opinions about fruit weighted to the US Adult population")) +
+  theme(legend.position = "bottom",
+        axis.title = element_blank(),
+        axis.text = element_text(size=12),
+        legend.key.width = unit(1, "cm"))
+
+ggsave(plot = fruit_heatmap_wtd_plot, "images\\fruit_heatmap_wtd_plot.png", w = 10.67, h = 8,type = "cairo-png")
+
 #####################################################
 ##
 ## Plot 1: Correlation Matrix
@@ -208,19 +289,51 @@ ggsave(plot = correlations_matrix, "images\\correlations_matrix.png", w = 10.67,
 
 #####################################################
 ##
+## Plot 1: Overall Average GPA & Standard Deviations
+##
+#####################################################
+
+overall_gpa <- clean_l %>%
+  filter(!is.na(gpa)) %>%
+  group_by(variable) %>%
+  summarise(avg_gpa = mean(gpa),
+            sd_gpa = sd(gpa))
+
+overall_gpa_se <- ggplot(overall_gpa, aes(x=reorder(variable,avg_gpa), y=avg_gpa,fill=avg_gpa)) + 
+  geom_point(pch=21,size=3) +
+  geom_errorbar(aes(ymin=avg_gpa-sd_gpa, ymax=avg_gpa+sd_gpa), width=.2) +
+  coord_flip() +
+  scale_fill_viridis(name="Average GPA") +
+  labs(title = paste("Overall Fruit GPA with Standard Error"),
+       subtitle = paste("among a very non-random sample of",count,"people with opinions about fruit")) +
+  theme(legend.position = "bottom",
+        axis.title = element_blank(),
+        axis.text = element_text(size=12),
+        legend.key.width = unit(1, "cm"))
+
+ggsave(plot = overall_gpa_se, "images\\overall_gpa_se.png", w = 10.67, h = 8,type = "cairo-png")
+
+
+#####################################################
+##
 ## Plot 1: Fruit Rankings by Demos
 ##
 #####################################################
 
 clean_demos <- survey_data %>%
-  select(fruits,`What is your age?`,
+  select(fruits,weights,
+         `What is your age?`,
          gender_recode,
          race_recode,
          income_recode,
-         fruit_servings) %>%
-  rename(age = "What is your age?")
+         fruit_servings,
+         `Do you consider yourself to be Conservative, Moderate, or Liberal?`,
+         `In the 2016 election for President, did you vote for Democrat Hillary Clinton or Republican Donald Trump?`) %>%
+  rename(age = "What is your age?",
+         ideo = "Do you consider yourself to be Conservative, Moderate, or Liberal?",
+         pres = "In the 2016 election for President, did you vote for Democrat Hillary Clinton or Republican Donald Trump?")
 
-clean_l_demos <- melt(clean_demos,id.vars = c("age","race_recode","gender_recode","income_recode","fruit_servings"))
+clean_l_demos <- melt(clean_demos,id.vars = c("weights","age","race_recode","gender_recode","income_recode","fruit_servings","ideo","pres"))
 
 clean_l_demos$gpa <- ifelse(clean_l_demos$value == "A-tier",4,
                              ifelse(clean_l_demos$value == "B-tier",3,
@@ -229,8 +342,8 @@ clean_l_demos$gpa <- ifelse(clean_l_demos$value == "A-tier",4,
                                                   ifelse(clean_l_demos$value == "F-tier",0,
                                                          NA)))))
 
-demos <- c("age","gender_recode","income_recode","race_recode","fruit_servings")
-demo_label <- c("Age","Gender","Income","Race/Ethnicity","Daily Fruit Servings")
+demos <- c("age","gender_recode","income_recode","race_recode","fruit_servings","ideo","pres")
+demo_label <- c("Age","Gender","Income","Race/Ethnicity","Daily Fruit Servings","Ideology","2016 Presidential Vote")
 
 num <- 1
 
@@ -242,6 +355,7 @@ for (d in demos) {
     filter(!is.na(clean_l_demos$gpa)) %>%
     group_by(.dots = group_var,variable) %>%
     summarise(avg_gpa = mean(gpa),
+              wtd_gpa = weighted.mean(gpa,weights),
               n = n()) %>%
     filter(n >= 10)
   
@@ -251,9 +365,10 @@ for (d in demos) {
     filter(!is.na(clean_l_demos$gpa)) %>%
     group_by(.dots = group_var) %>%
     summarise(avg_gpa = mean(gpa),
+              wtd_gpa = weighted.mean(gpa,weights),
               n = n()/21) %>%
     filter(n >= 10)%>%
-    select(group_var,avg_gpa)
+    select(group_var,avg_gpa) 
   
   avg_all_fruits$variable <- "All Fruits on Average"
   
@@ -262,6 +377,12 @@ for (d in demos) {
   avg_all_fruits <- avg_all_fruits[,c(1,3,2)]
   
   stats_demos <- bind_rows(data.frame(stats_demos),data.frame(avg_all_fruits))
+  
+  avg_all_fruits <- avg_all_fruits %>%
+    rename(avg_gpa_all = avg_gpa) %>%
+    select(avg_gpa_all,group_var)
+  
+  stats_demos <- merge(stats_demos,avg_all_fruits,by=group_var)
   
   stats_demos$variable <- reorder(stats_demos$variable,stats_demos$sort_gpa)
   stats_demos$avg_gpa <- round(stats_demos$avg_gpa,2)
@@ -282,7 +403,7 @@ for (d in demos) {
   num <- num + 1
   
 }
-  
+
 #####################################################
 ##
 ## Plot 1: Map of Favorite Fruits (Most A-tiered)
@@ -319,7 +440,187 @@ state_stats <- merge(state_stats,state_n) %>%
         total_n > 10) %>%
   select(state,variable,avg_gpa) 
 
-state_stats <- dcast(state_stats,state ~ variable,value.var = "avg_gpa")
+state_stats$rank <- ifelse(state_stats$avg_gpa<2,"Lowest Rated","Highest Rated")
+
+state_cols <- unique(state_stats$state)
+
+state_stats <- state_stats %>%
+  select(variable,avg_gpa,rank) %>%
+  mutate(avg_gpa = round(avg_gpa,2))
+
+state_stats <- state_stats[,c(3,1,2)]
+
+state_table <- htmlTable(
+  x        = state_stats,
+  caption  = paste("Highest/Lowest Rated Fruits by State"),
+  header    = c("","Fruit","Average GPA"),
+  rowlabel = "",
+  rgroup   = state_cols,
+  n.rgroup = c(2,2,2,2,2,2,2,2,2,2,2,2),
+  ctable   = TRUE,
+  type="html")
+
+print(state_table,useViewer = utils::browseURL)
+
+## create census regions
+
+clean_l_states$region_census <- ifelse(clean_l_states$state %in% c("Arizona","Colorado","Idaho","New Mexico","Montana","Utah","Nevada","Wyoming","Alaska","California","Hawaii","Oregon","Washington"),"Pacific",
+                                ifelse(clean_l_states$state %in% c("Delaware","District of Columbia","Florida","Georgia","Maryland","North Carolina","South Carolina","Virginia","West Virginia","Alabama","Kentucky","Mississippi","Tennessee","Arkansas","Louisiana","Oklahoma","Texas"),"South",
+                                       ifelse(clean_l_states$state %in% c("Indiana","Illinois","Michigan","Ohio","Wisconsin","Iowa","Nebraska","Kansas","North Dakota","Minnesota","South Dakota","Missouri"),"Midwest",
+                                              ifelse(clean_l_states$state %in% c("Connecticut","Maine","Massachusetts","New Hampshire","Rhode Island","Vermont","New Jersey","New York","Pennsylvania"),"Northeast","Other"))))
+
+region_stats <- clean_l_states %>%
+  filter(!is.na(clean_l_states$gpa)) %>%
+  group_by(region_census,variable) %>%
+  summarise(avg_gpa = mean(gpa)) %>%
+  mutate(min_gpa = min(avg_gpa),
+         max_gpa = max(avg_gpa)) %>%
+  filter((avg_gpa == min_gpa | avg_gpa == max_gpa)) %>%
+  select(region_census,variable,avg_gpa) %>%
+  mutate(jvar = row_number())
+
+region_rating <- dcast(region_stats,region_census ~ jvar, value.var = c("avg_gpa"))
+region_stats <- dcast(region_stats,region_census ~ jvar, value.var = c("variable"))
+
+region_stats <- region_stats %>%
+  rename(highest_rated = `1`,
+         lowest_rated = `2`)
+
+region_stats <- merge(region_rating,region_stats,by="region_census")
+
+state_lat_long <- map_data("state")
+
+state_lat_long$region_census <- ifelse(state_lat_long$region %in% c("arizona","colorado","idaho","new mexico","montana","utah","nevada","wyoming","alaska","california","hawaii","oregon","washington"),"Pacific",
+                                       ifelse(state_lat_long$region %in% c("delaware","district of columbia","florida","georgia","maryland","north carolina","south carolina","virginia","west virginia","alabama","kentucky","mississippi","tennessee","arkansas","louisiana","oklahoma","texas"),"South",
+                                              ifelse(state_lat_long$region %in% c("indiana","illinois","michigan","ohio","wisconsin","iowa","nebraska","kansas","north dakota","minnesota","south dakota","missouri"),"Midwest",
+                                                     ifelse(state_lat_long$region %in% c("connecticut","maine","massachusetts","new hampshire","rhode island","vermont","new jersey","new york","pennsylvania"),"Northeast","Other"))))
+
+states <- read_sf("cb_2017_us_state_500k.shp")
+
+
+states$region_census <- ifelse(states$NAME %in% c("Arizona","Colorado","Idaho","New Mexico","Montana","Utah","Nevada","Wyoming","Alaska","California","Hawaii","Oregon","Washington"),"Pacific",
+                                       ifelse(states$NAME %in% c("Delaware","District of Columbia","Florida","Georgia","Maryland","North Carolina","South Carolina","Virginia","West Virginia","Alabama","Kentucky","Mississippi","Tennessee","Arkansas","Louisiana","Oklahoma","Texas"),"South",
+                                              ifelse(states$NAME %in% c("Indiana","Illinois","Michigan","Ohio","Wisconsin","Iowa","Nebraska","Kansas","North Dakota","Minnesota","South Dakota","Missouri"),"Midwest",
+                                                     ifelse(states$NAME %in% c("Connecticut","Maine","Massachusetts","New Hampshire","Rhode Island","Vermont","New Jersey","New York","Pennsylvania"),"Northeast","Other"))))
+
+regions <- states %>%
+  group_by(region_census) %>%
+  summarize(
+    water = sum(AWATER),
+    land  = sum(ALAND))
+
+regions <- merge(region_stats,regions,by="region_census")
+
+map_plot <- ggplot(regions) +
+  geom_sf(aes(fill = highest_rated),size=1) +
+  coord_sf(xlim = c(-125, -68),ylim = c(25,50)) +
+  labs(title="Highest Rated Fruit by Census Region",
+       subtitle = paste("among a very non-random sample of",count,"people with opinions about fruit"),
+       fill="Fruit") +
+  theme(
+    panel.grid = element_blank(), 
+    line = element_blank(), 
+    rect = element_blank(), 
+    plot.background = element_rect(fill = "white"),
+    panel.border = element_blank(), 
+    axis.text = element_blank(),
+    legend.position = "bottom",
+    legend.text = element_text(size=12))
+  
+ggsave(plot = map_plot, paste0("images\\map_plot_plot.png"), w = 10.67, h = 8,type = "cairo-png")
+
+#####################################################
+##
+## Urban/Rural
+## source: https://www.census.gov/geo/maps-data/data/ua_rel_download.html
+##
+#####################################################
+
+urban_areas <- read.csv(file = "https://www2.census.gov/geo/docs/maps-data/data/rel/ua_zcta_rel_10.txt")
+
+urban_areas <- urban_areas %>%
+  filter(UA != 99999) %>%
+  select(ZCTA5,ZPOP)
+
+urban_areas <- distinct(urban_areas)
+
+survey_data$int_zip <- as.numeric(survey_data$`What zip code did you grow up in?`)
+
+survey_urban <- merge(survey_data,urban_areas,by.x="int_zip",by.y="ZCTA5",all.x = T)
+
+survey_urban$urban_rural <- ifelse(!is.na(survey_urban$ZPOP),"Urban","Rural")
+
+survey_urban <- survey_urban %>%
+  filter((int_zip != 0 & int_zip != 99999))
+
+clean_demos <- survey_urban %>%
+  select(fruits,urban_rural)
+
+clean_l_demos <- melt(clean_demos,id.vars = c("urban_rural"))
+
+clean_l_demos$gpa <- ifelse(clean_l_demos$value == "A-tier",4,
+                            ifelse(clean_l_demos$value == "B-tier",3,
+                                   ifelse(clean_l_demos$value == "C-tier",2,
+                                          ifelse(clean_l_demos$value == "D-tier",1,
+                                                 ifelse(clean_l_demos$value == "F-tier",0,
+                                                        NA)))))
+
+stats_demos <- clean_l_demos %>%
+  filter(!is.na(clean_l_demos$gpa)) %>%
+  group_by(urban_rural,variable) %>%
+  summarise(avg_gpa = mean(gpa),
+            n = n()) %>%
+  filter(n >= 10)
+
+stats_demos$sort_gpa <- stats_demos$avg_gpa
+
+avg_all_fruits <- clean_l_demos %>%
+  filter(!is.na(clean_l_demos$gpa)) %>%
+  group_by(urban_rural) %>%
+  summarise(avg_gpa = mean(gpa),
+            n = n()/21) %>%
+  filter(n >= 10)%>%
+  select(urban_rural,avg_gpa) 
+
+avg_all_fruits$variable <- "All Fruits on Average"
+
+avg_all_fruits$sort_gpa <- 0
+
+avg_all_fruits <- avg_all_fruits[,c(1,3,2)]
+
+stats_demos <- bind_rows(data.frame(stats_demos),data.frame(avg_all_fruits))
+
+avg_all_fruits <- avg_all_fruits %>%
+  rename(avg_gpa_all = avg_gpa) %>%
+  select(avg_gpa_all,urban_rural)
+
+stats_demos <- merge(stats_demos,avg_all_fruits,by="urban_rural")
+
+stats_demos$variable <- reorder(stats_demos$variable,stats_demos$sort_gpa)
+stats_demos$avg_gpa <- round(stats_demos$avg_gpa,2)
+
+scatter_data <- dcast(stats_demos,variable ~ urban_rural, value.var = "avg_gpa")
+
+scatter_data$diff <- scatter_data$Urban - scatter_data$Rural 
+
+
+x <- c("Fruit: ","Rural: ", "Urban: ")
+y <- c("{point.variable}",sprintf("{point.%s:.2f}", c("Rural", "Urban")))
+tltip <- tooltip_table(x, y)
+
+count_urban_rural <- nrow(survey_urban)
+
+urban_rural_chart <- hchart(scatter_data, "scatter", hcaes(x= Urban, y = Rural, color = diff)) %>% 
+  hc_add_series(data = abs(c(0,1,2,3,4)), type = "line",tooltip =F) %>%
+  hc_add_theme(hc_theme_smpl()) %>%
+  hc_tooltip(useHTML = TRUE, headerFormat = "", pointFormat = tltip) %>%
+  hc_title(
+    text = "Overall Fruit GPA by Urban/Rural Roots") %>%
+  hc_subtitle(text = paste("among a very non-random sample of",count_urban_rural,"people with opinions about fruit")) %>%
+  hc_yAxis(min = 1,title=list(text="Average Fruit Rating among Rural Roots")) %>%
+  hc_xAxis(min = 1,title=list(text="Average Fruit Rating among Urban Roots")) %>%
+  hc_size(600, 600)
+
 
 #####################################################
 ##
@@ -331,7 +632,8 @@ clean <- survey_data %>%
   select(fruits,gender_recode,
          income_recode,
          `What is your age?`,
-         race_recode) %>%
+         race_recode,
+         fruit_servings) %>%
   rename(age_recode = `What is your age?`)
 
 recode_fruits <- function(df,fruit) {
@@ -350,49 +652,33 @@ for (f in fruits) {
   clean <- recode_fruits(clean,f)
 }
 
-regression_data <- clean %>%
-  select(matches("_recode"))
+clean$Raspberries_recode <- as.vector(clean$Raspberries_recode)
 
-regression_data$male <- ifelse(regression_data$gender_recode == "Male",1,0)
-regression_data$white <- ifelse(regression_data$race_recode == "White/Caucasian",1,0)
-regression_data$youth <- ifelse(regression_data$age_recode == "18-24" | 
-                                regression_data$age_recode == "25-29",1,0)
-regression_data$low_income <- ifelse(regression_data$income_recode == "Under $50,000",1,0)
+clean <- clean %>%
+  mutate(avg_fruit_rating = rowSums(.[27:47])/21)
 
-model <- function(dv) {
-  model_results <- glm(get(dv) ~ male + white + youth + low_income,
-      data=regression_data,family=binomial())
-  return(model_results)
+clean$male <- ifelse(clean$gender_recode == "Male",1,0)
+clean$white <- ifelse(clean$race_recode == "White/Caucasian",1,0)
+clean$youth <- ifelse(clean$age_recode == "18-24" | 
+                        clean$age_recode == "25-29",1,0)
+clean$low_income <- ifelse(clean$income_recode == "Under $50,000",1,0)
+
+model_results <- data.frame()
+
+for(f in fruits) {
+  
+  dv <- paste0(f,"_recode")
+
+  model <- glm(get(dv) ~ male + race_recode + youth + low_income + fruit_servings, family = "binomial",data=clean)
+
+  model_df <- as.data.frame(summary.glm(model)$coefficients,row.names = F)
+  model_df$iv <- rownames(as.data.frame(summary.glm(model)$coefficients))
+  model_df$fruit <- f
+  model_df$odds <- exp(model_df$Estimate)
+  
+  model_results <- rbind(model_results,model_df)
+  
 }
-
-for (f in fruits) {
-
-  model(f)
-
-}
-
-## Create data frame of model coefficients and standard errors
-# Function to extract what we need
-ce <- function(model.obj) {
-  extract <- summary(get(model.obj))$coefficients[ ,1:4]
-  return(data.frame(extract, vars=row.names(extract), model=model.obj))
-}
-
-# Run function on the three models and bind into single data frame
-coefs <- do.call(rbind, sapply(paste0("vote_model",1:2), ce, simplify=FALSE))
-
-names(coefs)[2] <- "se" 
-
-# Faceted coefficient plot
-ggplot(coefs, aes(vars, Estimate)) + 
-  geom_hline(yintercept=0, lty=2, lwd=1, colour="grey50") +
-  geom_errorbar(aes(ymin=Estimate - se, ymax=Estimate + se, colour=vars), 
-                lwd=1, width=0,alpha = .8) +
-  geom_point(size=3, aes(colour=vars),alpha = .8) +
-  coord_flip() +
-  guides(colour=FALSE) +
-  labs(x="Coefficient", y="Value") +
-  theme_grey(base_size=15)
 
 #####################################################
 ##
@@ -546,7 +832,21 @@ demos_l <- melt(demos,id.vars = "id")
 demos_summary <- demos_l %>%
   group_by(variable,value) %>%
   summarise(n = n()) %>%
-  mutate(freq = n/sum(n)) %>%
+  mutate(freq = n/sum(n)) 
+
+demos_summary$value <- ordered(demos_summary$value,
+                                  levels = c("Male","Female","Other","White/Caucasian",
+                                             "Black or African American" ,"Hispanic or Latino" ,
+                                             "Asian/Pacific Islander","American Indian or Alaskan Native" ,
+                                             "Multiple ethnicity/Other" ,"Under $50,000","$50,000 to $100,000",
+                                             "Over $100,000","Not sure/Refuse","Democrat Hillary Clinton",
+                                             "Republican Donald Trump","Green Party Jill Stein","Libertarian Gary Johnson",
+                                             "Did not vote" ,"Refuse","Democrat","Independent","Republican",
+                                             "Liberal","Moderate","Conservative","Not sure"))
+
+demos_summary <- demos_summary %>%
+  group_by(variable,value) %>%
+  arrange(variable,value) %>%
   ungroup() %>%
   select(value,n,freq) %>%
   rename(Response = value,
@@ -555,9 +855,8 @@ demos_summary <- demos_l %>%
 
 demos_summary$Percent <- percent(round(demos_summary$Percent,2))
 
-
-htmlTable(
-  x        = rbind(demos_summary),
+demo_table <- htmlTable(
+  x        = demos_summary,
   caption  = paste("Demographic Summary Table"),
   label    = "",
   rowlabel = "",
@@ -573,4 +872,8 @@ htmlTable(
                6,
                4,
                4),
-  ctable   = TRUE)
+  ctable   = TRUE,
+  type="html")
+
+print(demo_table,useViewer = utils::browseURL)
+
