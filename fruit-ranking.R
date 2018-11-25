@@ -300,8 +300,8 @@ overall_gpa <- clean_l %>%
             sd_gpa = sd(gpa))
 
 overall_gpa_se <- ggplot(overall_gpa, aes(x=reorder(variable,avg_gpa), y=avg_gpa,fill=avg_gpa)) + 
-  geom_point(pch=21,size=3) +
   geom_errorbar(aes(ymin=avg_gpa-sd_gpa, ymax=avg_gpa+sd_gpa), width=.2) +
+  geom_point(pch=21,size=3) +
   coord_flip() +
   scale_fill_viridis(name="Average GPA") +
   labs(title = paste("Overall Fruit GPA with Standard Error"),
@@ -312,7 +312,6 @@ overall_gpa_se <- ggplot(overall_gpa, aes(x=reorder(variable,avg_gpa), y=avg_gpa
         legend.key.width = unit(1, "cm"))
 
 ggsave(plot = overall_gpa_se, "images\\overall_gpa_se.png", w = 10.67, h = 8,type = "cairo-png")
-
 
 #####################################################
 ##
@@ -498,10 +497,21 @@ state_lat_long$region_census <- ifelse(state_lat_long$region %in% c("arizona","c
 states <- read_sf("cb_2017_us_state_500k.shp")
 
 
+library(leaflet)
+library(rgdal)
+library(sp)
+library(rgeos)
+libs <- c("rgdal", "maptools", "gridExtra")
+lapply(libs, require, character.only = TRUE)
+
+
+states <- readOGR(dsn = ".", 
+                  layer = "cb_2017_us_state_500k")
+
 states$region_census <- ifelse(states$NAME %in% c("Arizona","Colorado","Idaho","New Mexico","Montana","Utah","Nevada","Wyoming","Alaska","California","Hawaii","Oregon","Washington"),"Pacific",
-                                       ifelse(states$NAME %in% c("Delaware","District of Columbia","Florida","Georgia","Maryland","North Carolina","South Carolina","Virginia","West Virginia","Alabama","Kentucky","Mississippi","Tennessee","Arkansas","Louisiana","Oklahoma","Texas"),"South",
-                                              ifelse(states$NAME %in% c("Indiana","Illinois","Michigan","Ohio","Wisconsin","Iowa","Nebraska","Kansas","North Dakota","Minnesota","South Dakota","Missouri"),"Midwest",
-                                                     ifelse(states$NAME %in% c("Connecticut","Maine","Massachusetts","New Hampshire","Rhode Island","Vermont","New Jersey","New York","Pennsylvania"),"Northeast","Other"))))
+                               ifelse(states$NAME %in% c("Delaware","District of Columbia","Florida","Georgia","Maryland","North Carolina","South Carolina","Virginia","West Virginia","Alabama","Kentucky","Mississippi","Tennessee","Arkansas","Louisiana","Oklahoma","Texas"),"South",
+                                      ifelse(states$NAME %in% c("Indiana","Illinois","Michigan","Ohio","Wisconsin","Iowa","Nebraska","Kansas","North Dakota","Minnesota","South Dakota","Missouri"),"Midwest",
+                                             ifelse(states$NAME %in% c("Connecticut","Maine","Massachusetts","New Hampshire","Rhode Island","Vermont","New Jersey","New York","Pennsylvania"),"Northeast","Other"))))
 
 regions <- states %>%
   group_by(region_census) %>%
@@ -509,26 +519,55 @@ regions <- states %>%
     water = sum(AWATER),
     land  = sum(ALAND))
 
-regions <- merge(region_stats,regions,by="region_census")
+states.coord <- coordinates(states)
 
-map_plot <- ggplot(regions) +
-  geom_sf(aes(fill = highest_rated),size=1) +
-  coord_sf(xlim = c(-125, -68),ylim = c(25,50)) +
-  labs(title="Highest Rated Fruit by Census Region",
-       subtitle = paste("among a very non-random sample of",count,"people with opinions about fruit"),
-       fill="Fruit") +
-  theme(
-    panel.grid = element_blank(), 
-    line = element_blank(), 
-    rect = element_blank(), 
-    plot.background = element_rect(fill = "white"),
-    panel.border = element_blank(), 
-    axis.text = element_blank(),
-    legend.position = "bottom",
-    legend.text = element_text(size=12))
+region.id <- ifelse(states$NAME %in% c("Arizona","Colorado","Idaho","New Mexico","Montana","Utah","Nevada","Wyoming","Alaska","California","Hawaii","Oregon","Washington"),"Pacific",
+                    ifelse(states$NAME %in% c("Delaware","District of Columbia","Florida","Georgia","Maryland","North Carolina","South Carolina","Virginia","West Virginia","Alabama","Kentucky","Mississippi","Tennessee","Arkansas","Louisiana","Oklahoma","Texas"),"South",
+                           ifelse(states$NAME %in% c("Indiana","Illinois","Michigan","Ohio","Wisconsin","Iowa","Nebraska","Kansas","North Dakota","Minnesota","South Dakota","Missouri"),"Midwest",
+                                  ifelse(states$NAME %in% c("Connecticut","Maine","Massachusetts","New Hampshire","Rhode Island","Vermont","New Jersey","New York","Pennsylvania"),"Northeast","Other"))))
+
+region.union <- unionSpatialPolygons(states, region.id)
+
+states.df <- as(states, "data.frame")
+
+regions <- merge(region_stats,states.df,by="region_census")
+
+states.df.agg <- aggregate(regions[, 2:3], list(region.id), mean)
+states.df.agg <- merge(states.df.agg,region_stats,by.x="Group.1",by.y="region_census")
+row.names(states.df.agg) <- as.character(states.df.agg$Group.1)
+
+states.shp.agg <- SpatialPolygonsDataFrame(region.union, states.df.agg)
+
+factpal <- colorFactor("Set1", states.shp.agg$highest_rated)
+
+labels <- sprintf(
+  "<strong>%s</strong><br/>Highest Rated Fruit: %s",
+  states.shp.agg$Group.1, states.shp.agg$highest_rated
+) %>% lapply(htmltools::HTML)
+
+leaflet(states.shp.agg) %>%
+  addTiles() %>%
+  addPolygons(stroke = T, 
+              smoothFactor = 0.2, 
+              fillOpacity = .75,
+              fillColor  = ~factpal(highest_rated),
+              weight = 2,
+              opacity = 1,
+              color = "black", 
+              highlight = highlightOptions(
+                weight = 5,
+                color = "#666",
+                dashArray = "",
+                fillOpacity = 0.7,
+                bringToFront = TRUE),
+              label = labels,
+              labelOptions = labelOptions(
+                style = list("font-weight" = "normal", padding = "3px 8px"),
+                textsize = "15px",
+                direction = "auto"))%>%
+  setView(-96, 37.8, 4) %>% 
+  addProviderTiles(providers$OpenStreetMap)
   
-ggsave(plot = map_plot, paste0("images\\map_plot_plot.png"), w = 10.67, h = 8,type = "cairo-png")
-
 #####################################################
 ##
 ## Urban/Rural
