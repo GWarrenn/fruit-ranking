@@ -1,3 +1,9 @@
+## Author: August Warren
+## Description: Analysis of DC Stop and Frisk Data
+## Date: 11/25/2018
+## Status: Published
+## Specs: R version 3.3.2 (2016-10-31)
+
 library(tidyverse)
 library(highcharter)
 library(googlesheets)
@@ -11,6 +17,11 @@ library(sf)
 library(survey)
 library(htmlTable)
 library(highcharter)
+library(leaflet)
+library(rgdal)
+library(sp)
+library(rgeos)
+library(mpaptools)
 
 #####################################################
 ##
@@ -136,6 +147,54 @@ overall_bar_plot <- ggplot(overall_stats,aes(x=value,y=freq,fill=value)) +
 
 ggsave(plot = overall_bar_plot, "images\\overall_bar_plot.png", w = 10.67, h = 8,type = "cairo-png")
 
+## Total & Average number of F-tier ratings given
+
+fruit_df <- survey_data %>%
+  select(fruits)
+
+survey_data$f_count <- 0
+
+df.new <- as.data.frame(lapply(fruit_df, function(x) ifelse(x == "F-tier", 1, 0)))
+
+df.new <- df.new %>%
+  mutate(count_f = rowSums(.))
+
+df.new$id <- seq.int(nrow(df.new))
+
+df.a <- as.data.frame(lapply(fruit_df, function(x) ifelse(x == "A-tier", 1, 0)))
+
+df.a <- df.a %>%
+  mutate(count_a = rowSums(.)) %>%
+  select(count_a)
+
+df.a$id <- seq.int(nrow(df.a))
+
+df.new <- merge(df.a,df.new, by="id")
+
+mean_f <- mean(df.new$count_f)
+mean_a <- mean(df.new$count_a)
+
+df.new <- df.new %>%
+  select(id,count_a,count_f) %>%
+  melt(id.vars ="id")
+
+df.new$variable <- ifelse(df.new$variable == "count_a","A-Tier","F-Tier")
+
+a_f_tier_ratings <- ggplot(df.new,aes(x=value,fill=variable)) +
+  geom_density(alpha = .5) +
+  geom_vline(xintercept = mean_f,color="blue") +
+  geom_vline(xintercept = mean_a,color="red") +
+  labs(title = "Distribution of A-tier & F-tier Ratings",
+       subtitle = paste("among a very non-random sample of",count,"people"),
+       x = "Total F-tier Ratings",
+       fill = "Tier") +
+  theme_bw() +
+  theme(legend.position = "bottom",
+        axis.title.y = element_blank(),
+        axis.text = element_text(size=12)) 
+
+ggsave(plot = a_f_tier_ratings, "images\\a_f_tier_ratings.png", w = 10.67, h = 8,type = "cairo-png")
+
 #####################################################
 ##
 ## Plot 1: Heat map of results
@@ -199,6 +258,8 @@ ggplot(stats_gpa,aes(x=reorder(fruit,value),y=variable)) +
 ##
 #####################################################
 
+survey_data$age <- survey_data$`What is your age?`
+
 survey_data.svy.unweighted <- svydesign(ids=~1, data=survey_data)
 
 sex.dist <- data.frame(gender_recode = c("Male", "Female","Other"),
@@ -208,11 +269,16 @@ race.dist <- data.frame(race_recode = c("White/Caucasian", "Black or African Ame
                                           "Asian/Pacific Islander","American Indian or Alaskan Native","Multiple ethnicity/Other"),
                         Freq = nrow(survey_data) * c(0.766, 0.134,.181,.058,.013,.027))
 
+age.dist <- data.frame(age = c("18-24", "25-29","30-34","35-39","40-44","45-49","50+"),
+                       Freq = nrow(survey_data) * c(0.0957, 0.0936,0.0885,0.0895,0.0927,0.1007,0.4393)) 
+
 survey_data.svy.rake <- rake(design = survey_data.svy.unweighted,
-                       sample.margins = list(~gender_recode,~race_recode),
-                       population.margins = list(sex.dist,race.dist))
+                       sample.margins = list(~gender_recode,~race_recode,~age),
+                       population.margins = list(sex.dist,race.dist,age.dist))
 
 survey_data$weights <- weights(survey_data.svy.rake)
+
+summary(weights(survey_data.svy.rake)) ## high weight of 17 ...
 
 clean <- survey_data %>%
   select(fruits,weights)
@@ -367,13 +433,13 @@ for (d in demos) {
               wtd_gpa = weighted.mean(gpa,weights),
               n = n()/21) %>%
     filter(n >= 10)%>%
-    select(group_var,avg_gpa) 
+    select(group_var,avg_gpa,wtd_gpa) 
   
   avg_all_fruits$variable <- "All Fruits on Average"
   
   avg_all_fruits$sort_gpa <- 0
   
-  avg_all_fruits <- avg_all_fruits[,c(1,3,2)]
+  avg_all_fruits <- avg_all_fruits[,c(1,3,2,4)]
   
   stats_demos <- bind_rows(data.frame(stats_demos),data.frame(avg_all_fruits))
   
@@ -385,7 +451,8 @@ for (d in demos) {
   
   stats_demos$variable <- reorder(stats_demos$variable,stats_demos$sort_gpa)
   stats_demos$avg_gpa <- round(stats_demos$avg_gpa,2)
-  
+  stats_demos$wtd_gpa <- round(stats_demos$wtd_gpa,2)
+    
   demo_plot <- ggplot(stats_demos,aes_string(x=d,y="variable")) +
     geom_tile(aes(fill = avg_gpa),colour = "white") +
     geom_text(aes_string(x=d,y="variable",label="avg_gpa")) +
@@ -398,6 +465,19 @@ for (d in demos) {
           legend.key.width = unit(1, "cm"))
   
   ggsave(plot = demo_plot, paste0("images\\demo_",d,"_plot.png"), w = 10.67, h = 8,type = "cairo-png")
+  
+  demo_wtd_plot <- ggplot(stats_demos,aes_string(x=d,y="variable")) +
+    geom_tile(aes(fill = wtd_gpa),colour = "white") +
+    geom_text(aes_string(x=d,y="variable",label="wtd_gpa")) +
+    scale_fill_viridis(name="GPA") +
+    labs(title = paste("Overall Fruit GPA by",demo_label[num]),
+         subtitle = paste("among a very non-random sample of",count,"people with opinions about fruit (weighted to the US adult population)")) +
+    theme(legend.position = "bottom",
+          axis.title = element_blank(),
+          axis.text = element_text(size=12),
+          legend.key.width = unit(1, "cm"))
+  
+  ggsave(plot = demo_wtd_plot, paste0("images\\demo_",d,"_wtd_plot.png"), w = 10.67, h = 8,type = "cairo-png")
   
   num <- num + 1
   
@@ -486,24 +566,6 @@ region_stats <- region_stats %>%
          lowest_rated = `2`)
 
 region_stats <- merge(region_rating,region_stats,by="region_census")
-
-state_lat_long <- map_data("state")
-
-state_lat_long$region_census <- ifelse(state_lat_long$region %in% c("arizona","colorado","idaho","new mexico","montana","utah","nevada","wyoming","alaska","california","hawaii","oregon","washington"),"Pacific",
-                                       ifelse(state_lat_long$region %in% c("delaware","district of columbia","florida","georgia","maryland","north carolina","south carolina","virginia","west virginia","alabama","kentucky","mississippi","tennessee","arkansas","louisiana","oklahoma","texas"),"South",
-                                              ifelse(state_lat_long$region %in% c("indiana","illinois","michigan","ohio","wisconsin","iowa","nebraska","kansas","north dakota","minnesota","south dakota","missouri"),"Midwest",
-                                                     ifelse(state_lat_long$region %in% c("connecticut","maine","massachusetts","new hampshire","rhode island","vermont","new jersey","new york","pennsylvania"),"Northeast","Other"))))
-
-states <- read_sf("cb_2017_us_state_500k.shp")
-
-
-library(leaflet)
-library(rgdal)
-library(sp)
-library(rgeos)
-libs <- c("rgdal", "maptools", "gridExtra")
-lapply(libs, require, character.only = TRUE)
-
 
 states <- readOGR(dsn = ".", 
                   layer = "cb_2017_us_state_500k")
@@ -797,6 +859,8 @@ demo_label <- c("Age","Gender","Income","Race/Ethnicity")
 
 num <- 1
 
+d <- "race_recode"
+
 for (d in demos) {
   
   group_var <- d[1]
@@ -828,13 +892,39 @@ for (d in demos) {
 
   stats_demos <- merge(stats_demos,n_sizes) %>%
     filter(n_size >= 10 & value == "Fruit!")
+  
+  stats_demos$merge_var <- stats_demos[,1]
 
+  ## create complete df of fruits and options to merge in for 100% & 0% results
+  
+  complete_options <- distinct(stats_demos,variable,value) 
+  
+  demos <- stats_demos %>%
+    select(.dots = d) %>%
+    distinct(.dots = d)
+  
+  demos <- as.list(demos[,1])
+  
+  total_df <- data.frame()
+  
+  for (i in demos) {
+    temp_df <- complete_options
+    temp_df$merge_var <- i  
+    
+    total_df <- rbind(total_df,temp_df)
+  }
+  
+  stats_demos <- merge(stats_demos,total_df,by=c("merge_var","variable","value"),all=T,how="outer")
+  
+  stats_demos$freq <- ifelse(is.na(stats_demos$freq),0,stats_demos$freq)
+  stats_demos$sort_freq <- ifelse(is.na(stats_demos$sort_freq),0,stats_demos$sort_freq)
+  
   stats_demos$variable <- reorder(stats_demos$variable,stats_demos$sort_freq)
   stats_demos$freq_lab <- percent(round(stats_demos$freq,2))
   
-  demo_plot <- ggplot(stats_demos,aes_string(x=d,y="variable")) +
+  demo_plot <- ggplot(stats_demos,aes_string(x="merge_var",y="variable")) +
     geom_tile(aes(fill = freq),colour = "white") +
-    geom_text(aes_string(x=d,y="variable",label="freq_lab"),size=6) +
+    geom_text(aes_string(x="merge_var",y="variable",label="freq_lab"),size=6) +
     scale_fill_viridis(name="% Fruit!",labels = percent) +
     labs(title = paste("% Fruit! by",demo_label[num]),
          subtitle = paste("among a very non-random sample of",count,"people with opinions about fruit")) +
