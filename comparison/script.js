@@ -17,7 +17,7 @@ function draw(data, tabletop) {
 	var fruits = ['Raspberries',
 				'Strawberries',
 				'Bananas',
-				'Watermelon	',
+				'Watermelon',
 				'Green Apples',
 				'Blueberries',
 				'Canteloupe',
@@ -57,6 +57,11 @@ function draw(data, tabletop) {
 		});
 
 	console.log(all)
+
+	var order = ["A-tier", "B-tier", "C-tier", "D-tier","F-tier","Don't Know/Care"];
+	all = _.sortBy(all, function(obj){ 
+	    return _.indexOf(order, obj.key);
+	});
 
 	// set the dimensions and margins of the graph
 	var margin = {top: 20, right: 20, bottom: 30, left: 40},
