@@ -7,10 +7,32 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.10/lodash.min.js"></script>
 
+<link rel="stylesheet" type="text/css" href="style.css">
+
 </head>
 	<body>
 
 		<script type="text/javascript" src="script.js"></script>
+
+		<body onload="random_fruit()">
+
+		<div id='fruit' style="font-family:Helvetica;font-size:18pt" align="center"></div>
+		<div id='user-pick' style="font-family:Helvetica;" align="center"></div>
+
+		<div id="fruit-stats"></div>
+
+		<div style="text-align:center;">
+			<input class="button" type="button" value="A-tier" onclick="msg('A-tier')">
+			<input class="button button2" type="button" value="B-tier" onclick="msg('B-tier')">
+			<input class="button button3" type="button" value="C-tier" onclick="msg('C-tier')">
+			<input class="button button4" type="button" value="D-tier" onclick="msg('D-tier')">
+			<input class="button button5" type="button" value="F-tier" onclick="msg('F-tier')">
+			<input class="button button6" type="button" value="Don't Know/Care" onclick='msg("")'>
+		</div>
+		
+		<div style="text-align:center;">	
+			<input class="button button6" type="button" value="Next Fruit" onclick="random_fruit()">
+		</div>		
 
 	</body>
 </html>	
