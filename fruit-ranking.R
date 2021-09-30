@@ -23,19 +23,23 @@ library(sp)
 library(rgeos)
 library(mpaptools)
 
+library(googledrive)
+
 #####################################################
 ##
 ## Connect to data via googlesheets
 ##
 #####################################################
 
-gs_ls()
+setwd("/Users/augustwarren/github/fruit-ranking/")
 
-fruit_doc <- gs_title("Fruit Ranking (Responses)")
+sheets <- drive_find(type = "spreadsheet")
 
-gs_ws_ls(fruit_doc)
+sheet_id <- "104eRCUeyIsyHZpWiGP5XcZ4oiXnBBos55Z5uUYh0TpM"
 
-survey_data <- gs_read(ss = fruit_doc)
+drive_download(as_id(sheet_id), type = "csv",overwrite = T)
+
+survey_data <- read.csv("Fruit Ranking (Responses).csv")
 
 #####################################################
 ##
@@ -69,36 +73,39 @@ ggsave(plot = completes, "images\\completes.png", w = 10.67, h = 8,type = "cairo
 
 columns <- colnames(survey_data)
 
-columns <- sub(x=columns,pattern = "Assign the following fruits to tiers \\(where A-tier is the best/highest quality and F-tier is reserved for the fruits that deserve to be banished\\)\\.  \\[(.*)\\]",
-         replacement = "\\1")
+columns <- sub(x=columns,pattern = "Assign.the.following.fruits.to.tiers..where.A.tier.is.the.best.highest.quality.and.F.tier.is.reserved.for.the.fruits.that.deserve.to.be.banished.....",
+               replacement = "")
+
+columns <- sub(x=columns,pattern = ".$",
+               replacement = "")
 
 colnames(survey_data) <- columns
 
-fruits <- c("Raspberries","Strawberries","Bananas","Watermelon","Green Apples",
+fruits <- c("Raspberries","Strawberries","Bananas","Watermelon","Green.Apples",
             "Blueberries","Canteloupe","Honeydew","Kiwi","Mango","Apricots",
             "Blackberries","Clementines","Cherries","Grapes","Oranges","Peaches",
-            "Pears","Pineapple","Grapefruit","Red Apples")
+            "Pears","Pineapple","Grapefruit","Red.Apples")
 
-survey_data$gender_recode <- ifelse(survey_data$`To which gender do you most closely identify?` == "Male","Male",
-                                    ifelse(survey_data$`To which gender do you most closely identify?` == "Female","Female","Other"))
+survey_data$gender_recode <- ifelse(survey_data$To.which.gender.do.you.most.closely.identify  == "Male","Male",
+                                    ifelse(survey_data$To.which.gender.do.you.most.closely.identify  == "Female","Female","Other"))
 
-survey_data$race_recode <- factor(survey_data$`Which race/ethnicity best describes you? (Please choose only one.)`,
+survey_data$race_recode <- factor(survey_data$Which.race.ethnicity.best.describes.you...Please.choose.only.one.,
          levels = c("White/Caucasian","Black or African American","Hispanic or Latino","Asian/Pacific Islander",
                   "American Indian or Alaskan Native","Multiple ethnicity/Other"))
 
-survey_data$income_recode <- factor(survey_data$`What was your total household income before taxes during the past 12 months?`,
+survey_data$income_recode <- factor(survey_data$What.was.your.total.household.income.before.taxes.during.the.past.12.months,
                                     levels = c("Under $50,000","$50,000 to $100,000","Over $100,000","Not sure/Refuse"))
 
-survey_data$fruit_servings <- ifelse(survey_data$`How many servings of fruit do you eat a day, on average?` == "3 or more","4 or more",
-                                     survey_data$`How many servings of fruit do you eat a day, on average?`)
+survey_data$fruit_servings <- ifelse(survey_data$How.many.servings.of.fruit.do.you.eat.a.day..on.average == "3 or more","4 or more",
+                                     survey_data$How.many.servings.of.fruit.do.you.eat.a.day..on.average)
 
-survey_data$`Do you consider yourself to be Conservative, Moderate, or Liberal?` <- factor(survey_data$`Do you consider yourself to be Conservative, Moderate, or Liberal?`,
+survey_data$Do.you.consider.yourself.to.be.Conservative..Moderate..or.Liberal. <- factor(survey_data$Do.you.consider.yourself.to.be.Conservative..Moderate..or.Liberal,
                                                                                            levels = c("Liberal","Moderate","Conservative","Not sure")) 
 
-survey_data$`Do you consider yourself a Democrat, Republican, or something else?` <- factor(survey_data$`Do you consider yourself a Democrat, Republican, or something else?`,
+survey_data$Do.you.consider.yourself.a.Democrat..Republican..or.something.else. <- factor(survey_data$Do.you.consider.yourself.a.Democrat..Republican..or.something.else,
                                                                                             levels = c("Democrat","Independent","Republican","Not sure")) 
 
-survey_data$`In the 2016 election for President, did you vote for Democrat Hillary Clinton or Republican Donald Trump?` <- factor(survey_data$`In the 2016 election for President, did you vote for Democrat Hillary Clinton or Republican Donald Trump?`,
+survey_data$In.the.2016.election.for.President..did.you.vote.for.Democrat.Hillary.Clinton.or.Republican.Donald.Trump. <- factor(survey_data$In.the.2016.election.for.President..did.you.vote.for.Democrat.Hillary.Clinton.or.Republican.Donald.Trump,
                                                                                                                                   levels = c("Democrat Hillary Clinton","Republican Donald Trump","Green Party Jill Stein","Libertarian Gary Johnson","Did not vote","Refuse"))
 
 ## reshape fruit data to long for top-level aggregation
@@ -938,6 +945,109 @@ for (d in demos) {
   num <- num + 1
   
 }
+
+#####################################################
+##
+## Fruit Production
+##
+#####################################################
+
+clean <- survey_data %>%
+  select(fruits,
+         gender_recode,
+         income_recode,
+         What.is.your.age,
+         race_recode,
+         fruit_servings,
+         What.zip.code.did.you.grow.up.in) %>%
+  rename(age_recode = What.is.your.age)
+
+recode_fruits <- function(df,fruit) {
+  new_var <- paste0(fruit,"_recode")
+  
+  df[new_var] <- ifelse(df[,fruit] == "A-tier",1,
+                        ifelse(df[,fruit] == "B-tier",.75,
+                               ifelse(df[,fruit] == "C-tier",.5,
+                                      ifelse(df[,fruit] == "D-tier",.25,
+                                             ifelse(df[,fruit] == "F-tier",0,
+                                                    NA)))))
+  return(as.data.frame(df))
+}
+
+for (f in fruits) {
+  clean <- recode_fruits(clean,f)
+  clean <- clean %>%
+    select(-f)
+}
+
+clean$Raspberries_recode <- as.vector(clean$Raspberries_recode)
+
+clean$respondent_id <- seq.int(nrow(clean))
+
+id_vars <- c("respondent_id","gender_recode","age_recode",
+             "income_recode","fruit_servings",
+             "What.zip.code.did.you.grow.up.in",
+             "race_recode")
+
+clean_l <- melt(clean, id.vars = id_vars) %>%
+  filter(!is.na(What.zip.code.did.you.grow.up.in))
+
+clean_l$variable <- ifelse(as.character(clean_l$variable) == "Red.Apples_recode" | 
+                             as.character(clean_l$variable) == "Green.Apples_recode","Apples_recode",
+                           as.character(clean_l$variable))
+
+clean_l <- clean_l %>%
+  group_by(respondent_id,gender_recode,age_recode,
+           income_recode,fruit_servings,
+           What.zip.code.did.you.grow.up.in,
+           race_recode,variable) %>%
+  summarise(adj_value = mean(value,rm.na=T)) %>%
+  mutate(variable = sub(x=variable,pattern = "_recode","",replacement = ""))
+
+## pull in zip to state look-up file
+
+zip_state <- read.csv("ZIP-COUNTY-FIPS_2010-03.csv")
+
+clean_l_state <- merge(clean_l,zip_state,by.x="What.zip.code.did.you.grow.up.in",by.y="ZIP",all.x=T)
+
+clean_l_state$state_fips <- ifelse(clean_l_state$STCOUNTYFP < 10000,
+                                   as.numeric(substr(as.character(clean_l_state$STCOUNTYFP), start = 1, stop = 1)),
+                                   as.numeric(substr(as.character(clean_l_state$STCOUNTYFP), start = 1, stop = 2)))
+
+## pull in state level fruit production 
+
+fruit_production <- read.csv("ECE5A911-6DC5-315F-A12F-4FB24A135D63.csv") %>%
+  mutate(fruit_recode = trimws(sub(x=Data.Item,pattern = " -.*",
+                                replacement = "")),
+         Data.Item = trimws(Data.Item)) %>%
+  filter(Period == "YEAR" &
+           fruit_recode %in% c("APPLES","BANANAS","BLACKBERRIES","BLUEBERRIES, TAME","CHERRIES",
+                            "GRAPES","GRAPEFRUIT","KIWIFRUIT","ORANGES","PEACHES","PEARS","RASPBERRIES",
+                            "STRAWBERRIES") &
+           (Data.Item == paste0(fruit_recode," - PRODUCTION, MEASURED IN TONS") | 
+              Data.Item == paste0(fruit_recode," - PRODUCTION, MEASURED IN LB")) &
+            !grepl(pattern = "\\$",x = Data.Item)) %>%
+  mutate(Commodity = str_to_title(Commodity),
+         value_int = as.numeric(gsub(",","",Value)),
+         value_int = if_else(grepl("TONS",Data.Item),value_int*2000,value_int)) %>%
+  group_by(State,State.ANSI,Commodity) %>%
+  summarise(avg_production = mean(value_int,na.rm=T))
+
+## merge
+
+opinion_production <- merge(clean_l_state,fruit_production,
+                            by.x=c("state_fips","variable"),
+                            by.y=c("State.ANSI","Commodity")) %>%
+  filter(!is.na(COUNTYNAME)) %>%
+  mutate(production_bins = ntile(avg_production, 4))
+
+rating_by_bins <- opinion_production %>%
+  group_by(variable,production_bins) %>%
+  filter(!is.na(adj_value)) %>%
+  summarise(avg_rating = mean(adj_value))
+
+ggplot(opinion_production,aes(avg_production,y=adj_value)) +
+  geom_point()
 
 #####################################################
 ##
